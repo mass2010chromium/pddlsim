@@ -22,7 +22,7 @@ jobs:
         with:
           enable-cache: true
           # Install a specific version of uv.
-          version: "0.7.12"
+          version: "0.8.14"
       
       - name: Set up Python
         uses: actions/setup-python@v5
