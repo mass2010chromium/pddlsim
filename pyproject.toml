@@ -1,6 +1,6 @@
 [project]
 name = "pddlsim"
-version = "0.2.0.dev3"
+version = "0.2.0.dev4"
 description = "PDDL-based simulator for the BIU course \"Introduction to Intelligent, Knowledge-Based and Cognitive Systems\""
 authors = [
     { name = "Gal A. Kaminka", email = "galk@cs.biu.ac.il" },
