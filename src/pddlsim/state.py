@@ -50,7 +50,7 @@ class SimulationState:
             case Predicate():
                 self._true_predicates.add(atom)
             case NotPredicate(base_predicate):
-                self._true_predicates.remove(base_predicate)
+                self._true_predicates.discard(base_predicate)
 
     def does_condition_hold(self, condition: Condition[Object]) -> bool:
         """Check if the given grounded condition holds in the state."""

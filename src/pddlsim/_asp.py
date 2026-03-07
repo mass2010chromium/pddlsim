@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, MutableMapping, Sequence
+from collections.abc import Callable, Generator, MutableMapping, Sequence, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from itertools import chain
@@ -15,6 +15,7 @@ from pddlsim.ast import (
     Condition,
     Domain,
     EqualityCondition,
+    ForallCondition,
     Identifier,
     NotCondition,
     Object,
@@ -454,6 +455,7 @@ def _add_condition_to_asp_part(
 
 
 def action_definition_asp_part(
+    problem: Problem,
     action_definition: ActionDefinition,
     variable_id_allocator: IDAllocator[Variable],
     object_id_allocator: IDAllocator[Object],
@@ -478,9 +480,52 @@ def action_definition_asp_part(
             ],
         )
 
-    # Specify the precondition over the parameters
+    # Preprocess precondition to replace Foralls with series of Ands
+    def _expand_substitute(
+        condition: Condition[Argument], substitutions: Mapping[Variable, Object]
+    ) -> Condition[Object]:
+        """Fold in to use global information for Forall..."""
+        match condition:
+            case AndCondition(subconditions):
+                return AndCondition(
+                    [
+                        _expand_substitute(subcondition, substitutions)
+                        for subcondition in subconditions
+                    ]
+                )
+            case OrCondition(subconditions):
+                return OrCondition(
+                    [
+                        _expand_substitute(subcondition, substitutions)
+                        for subcondition in subconditions
+                    ]
+                )
+            case NotCondition(base_condition):
+                return NotCondition(_expand_substitute(base_condition, substitutions))
+            case EqualityCondition(left_side, right_side):
+                return EqualityCondition(
+                    substitutions.get(left_side, left_side),
+                    substitutions.get(right_side, right_side),
+                )
+            case ForallCondition(loop_var, condition):
+                new_subs = dict(substitutions)
+                conditions = []
+                for param in problem.objects_section:
+                    if param.type == loop_var.type:
+                        new_subs[loop_var.value] = param.value
+                        conditions.append(_expand_substitute(condition, new_subs))
+                return AndCondition(conditions)
+            case Predicate(name, assignment):
+                return Predicate(
+                    name,
+                    tuple(
+                        substitutions.get(argument, argument)
+                        for argument in assignment
+                    ),
+                )
+
     precondition_id = _add_condition_to_asp_part(
-        action_definition.precondition,
+        _expand_substitute(action_definition.precondition, {}),
         part,
         IDAllocator.from_id_constructor(RuleID),
         variable_id_allocator,

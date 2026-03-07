@@ -41,6 +41,7 @@ from pddlsim.ast import (
     Domain,
     Effect,
     EqualityCondition,
+    ForallCondition,
     GroundedAction,
     Identifier,
     NotCondition,
@@ -76,30 +77,39 @@ def _ground_predicate(
 
 
 def _ground_condition(
-    condition: Condition[Argument], grounding: Mapping[Variable, Object]
+    condition: Condition[Argument], grounding: Mapping[Variable, Object], problem: Problem
 ) -> Condition[Object]:
+    """Fold in to use global information for Forall..."""
     match condition:
         case AndCondition(subconditions):
             return AndCondition(
                 [
-                    _ground_condition(subcondition, grounding)
+                    _ground_condition(subcondition, grounding, problem)
                     for subcondition in subconditions
                 ]
             )
         case OrCondition(subconditions):
             return OrCondition(
                 [
-                    _ground_condition(subcondition, grounding)
+                    _ground_condition(subcondition, grounding, problem)
                     for subcondition in subconditions
                 ]
             )
         case NotCondition(base_condition):
-            return NotCondition(_ground_condition(base_condition, grounding))
+            return NotCondition(_ground_condition(base_condition, grounding, problem))
         case EqualityCondition(left_side, right_side):
             return EqualityCondition(
                 _ground_argument(left_side, grounding),
                 _ground_argument(right_side, grounding),
             )
+        case ForallCondition(loop_var, condition):
+            conditions = []
+            for param in problem.objects_section:
+                if param.type == loop_var.type:
+                    instance_grounding = dict(grounding)
+                    instance_grounding[loop_var.value] = param.value
+                    conditions.append(_ground_condition(condition, instance_grounding, problem))
+            return AndCondition(conditions)
         case Predicate():
             return _ground_predicate(condition, grounding)
 
@@ -218,6 +228,7 @@ class Simulation:
         return {
             action_definition.name: (
                 action_definition_asp_part(
+                    self.problem,
                     action_definition,
                     variable_id_allocator := IDAllocator[
                         Variable
@@ -372,7 +383,7 @@ class Simulation:
         }
 
         if not self.state.does_condition_hold(
-            _ground_condition(action_definition.precondition, grounding)
+            _ground_condition(action_definition.precondition, grounding, self.problem)
         ):
             raise ValueError("grounded action doesn't satisfy precondition")
 
@@ -388,6 +399,7 @@ class Simulation:
         self._update_revealables()
 
         return True
+
 
     def _get_groundings(
         self, action_definition: ActionDefinition
