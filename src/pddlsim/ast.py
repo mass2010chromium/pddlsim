@@ -662,7 +662,7 @@ class ForallCondition[A: Argument]:
 
     @override
     def __repr__(self) -> str:
-        return f"(= {self.left_side!r} {self.right_side!r})"
+        return f"(forall ({self.loop_var!r}) {self.condition!r})"
 
 
 class _SerializedPredicate(TypedDict):
