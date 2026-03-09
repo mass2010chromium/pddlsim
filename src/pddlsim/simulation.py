@@ -14,6 +14,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass
 from functools import cached_property
+import itertools
 from random import Random
 from typing import cast
 
@@ -79,7 +80,6 @@ def _ground_predicate(
 def _ground_condition(
     condition: Condition[Argument], grounding: Mapping[Variable, Object], problem: Problem
 ) -> Condition[Object]:
-    """Fold in to use global information for Forall..."""
     match condition:
         case AndCondition(subconditions):
             return AndCondition(
@@ -102,14 +102,29 @@ def _ground_condition(
                 _ground_argument(left_side, grounding),
                 _ground_argument(right_side, grounding),
             )
-        case ForallCondition(loop_var, condition):
-            conditions = []
+        case ForallCondition(variables, condition):
+            names = []      # list[variable_name]
+            choices = []    # list[list[variable_grounding]]
+            objects_by_type = {}
             for param in problem.objects_section:
-                if param.type == loop_var.type:
-                    instance_grounding = dict(grounding)
-                    instance_grounding[loop_var.value] = param.value
-                    conditions.append(_ground_condition(condition, instance_grounding, problem))
-            return AndCondition(conditions)
+                if param.type not in objects_by_type:
+                    objects_by_type[param.type] = []
+                objects_by_type[param.type].append(param.value)
+            for typed_variable in variables:
+                names.append(typed_variable.value)
+                choices.append(objects_by_type[typed_variable.type])
+
+            all_choices = itertools.product(*choices)
+            grounded_conditions = []
+            for choice in all_choices:
+                # Copy grounding dict, and add in the specific choice
+                # NOTE: this can explode memory if you make big foralls,
+                # maybe this pipeline should be entirely generator based?
+                # Would require rewriting the grounding and checking pipeline though.
+                instance_grounding = dict(grounding)
+                instance_grounding.update({name: value for name, value in zip(names, choice)})
+                grounded_conditions.append(_ground_condition(condition, instance_grounding, problem))
+            return AndCondition(grounded_conditions)
         case Predicate():
             return _ground_predicate(condition, grounding)
 

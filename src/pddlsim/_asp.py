@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, MutableMapping, Sequence, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+import itertools
 from itertools import chain
 from typing import NewType
 
@@ -507,13 +508,30 @@ def action_definition_asp_part(
                     substitutions.get(left_side, left_side),
                     substitutions.get(right_side, right_side),
                 )
-            case ForallCondition(loop_var, condition):
-                new_subs = dict(substitutions)
-                conditions = []
+            case ForallCondition(variables, child_condition):
+                names = []      # list[variable_name]
+                choices = []    # list[list[variable_grounding]]
+                objects_by_type = {}
                 for param in problem.objects_section:
-                    if param.type == loop_var.type:
-                        new_subs[loop_var.value] = param.value
-                        conditions.append(_expand_substitute(condition, new_subs))
+                    if param.type not in objects_by_type:
+                        objects_by_type[param.type] = []
+                    objects_by_type[param.type].append(param.value)
+                for typed_variable in variables:
+                    names.append(typed_variable.value)
+                    choices.append(objects_by_type[typed_variable.type])
+
+                all_choices = itertools.product(*choices)
+
+                conditions = []
+                for choice in all_choices:
+                    # Copy grounding dict, and add in the specific choice
+                    # NOTE: this can explode memory if you make big foralls,
+                    # maybe this pipeline should be entirely generator based?
+                    # Would require rewriting the grounding and checking pipeline though.
+                    new_subs = dict(substitutions)
+                    new_subs.update({name: value for name, value in zip(names, choice)})
+                    conditions.append(_expand_substitute(child_condition, new_subs))
+
                 return AndCondition(conditions)
             case Predicate(name, assignment):
                 return Predicate(

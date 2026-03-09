@@ -640,10 +640,12 @@ class EqualityCondition[A: Argument](_Locationed):
 
 @dataclass(frozen=True)
 class ForallCondition[A: Argument]:
-    """Represents an forall predicate (forall (arg) condition) in PDDL."""
+    """Represents a forall predicate (`forall`) in PDDL."""
 
-    loop_var: Typed
+    variables: list[Typed[Variable]]
+    """Parameters local to the forall predicate."""
     condition: "Condition[A]"
+    """Single subcondition to evaluate for valid choices of parameters."""
 
     def _validate(
         self,
@@ -651,10 +653,11 @@ class ForallCondition[A: Argument]:
         objects: Mapping[Object, Type],
         domain: "Domain",
     ) -> None:
-
         scope_dict = dict(parameters._items)
-        scope_dict[self.loop_var.value] = self.loop_var.type
-        self.condition._validate(scope_dict, objects, domain)
+        for typed_variable in self.variables:
+            scope_dict[typed_variable.value] = typed_variable.type
+        scoped_parameters = Parameters(_items=scope_dict, definition=parameters.definition)
+        self.condition._validate(scoped_parameters, objects, domain)
 
     @override
     def _as_str_without_location(self) -> str:
@@ -662,7 +665,10 @@ class ForallCondition[A: Argument]:
 
     @override
     def __repr__(self) -> str:
-        return f"(forall ({self.loop_var!r}) {self.condition!r})"
+        parameters = (
+            f"({' '.join(map(repr, self.variables))})"
+        )
+        return f"(forall ({parameters}) {self.condition!r})"
 
 
 class _SerializedPredicate(TypedDict):

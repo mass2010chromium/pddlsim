@@ -203,11 +203,10 @@ class _PDDLTransformer(Transformer):
 
     def forall_condition[A: Argument](
         self,
-        loop_var: A,
-        loop_type: A,
+        parameters: Iterable[Typed[Variable]],
         condition: Condition[A],
     ) -> ForallCondition[A]:
-        return ForallCondition(Typed(loop_var, loop_type), condition)
+        return ForallCondition(list(parameters), condition)
 
     def not_predicate[A: Argument](
         self, base_predicate: Predicate[A]
