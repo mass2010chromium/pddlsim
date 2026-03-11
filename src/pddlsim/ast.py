@@ -668,7 +668,7 @@ class ForallCondition[A: Argument]:
         parameters = (
             f"({' '.join(map(repr, self.variables))})"
         )
-        return f"(forall ({parameters}) {self.condition!r})"
+        return f"(forall {parameters} {self.condition!r})"
 
 
 class _SerializedPredicate(TypedDict):
