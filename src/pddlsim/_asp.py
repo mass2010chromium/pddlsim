@@ -518,7 +518,7 @@ def action_definition_asp_part(
                     objects_by_type[param.type].append(param.value)
                 for typed_variable in variables:
                     names.append(typed_variable.value)
-                    choices.append(objects_by_type[typed_variable.type])
+                    choices.append(objects_by_type.get(typed_variable.type, []))
 
                 all_choices = itertools.product(*choices)
 
