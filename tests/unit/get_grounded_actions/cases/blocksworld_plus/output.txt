@@ -1,0 +1,5 @@
+(pickup_from bowl1 arm table)
+(pickup_from bowl2 arm table)
+(pickup_from ramekin arm table)
+(pickup_from cookies arm table)
+(open drawers arm)
