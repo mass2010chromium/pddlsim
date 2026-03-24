@@ -90,6 +90,8 @@ class TemporaryID(ID):
     def prefix(cls) -> str:
         return "T"
 
+ASP_TRUE = "dummy_true"
+ASP_ACTION_LABEL = "action"
 
 @dataclass
 class IDAllocator[T]:
@@ -208,6 +210,15 @@ class ASPPart:
     ) -> LiteralAST:
         return self.create_function_literal(name, [], truthiness)
 
+    def create_conditional_literal(
+        self, literal: LiteralAST, conditions: Sequence[LiteralAST]
+    ) -> LiteralAST:
+        return clingo.ast.ConditionalLiteral(
+            self.next_location(),
+            literal,
+            conditions
+        )
+
     def _add_fact(self, ast: clingo.ast.AST) -> None:
         self._statements.append(clingo.ast.Rule(self.next_location(), ast, []))
 
@@ -267,7 +278,6 @@ class ASPPartKind(StrEnum):
     STATE = "state"
     ACTION_DEFINITION = "action_definition"
 
-
 def objects_asp_part(
     domain: Domain,
     problem: Problem,
@@ -283,6 +293,13 @@ def objects_asp_part(
         part.add_fact(
             part.create_function_literal(
                 str(type_id), [part.create_symbol(str(object_id))]
+            )
+        )
+        # A set of "dummy facts" to absorb unused arguments with.
+        # Basially, a universal true statement that absorbs the argument.
+        part.add_fact(
+            part.create_function_literal(
+                ASP_TRUE, [part.create_symbol(str(object_id))]
             )
         )
 
@@ -339,27 +356,80 @@ def _add_condition_to_asp_part(
     variable_id_allocator: IDAllocator[Variable],
     object_id_allocator: IDAllocator[Object],
     predicate_id_allocator: IDAllocator[Identifier],
-) -> ID:
-    temporary_id_allocator = IDAllocator[Variable].from_id_constructor(
-        TemporaryID
-    )
+    type_id_allocator: IDAllocator[Type],
+) -> tuple[ID, list[Variable]]:
+
+    """
+    Add rules corresponding to a precondition of an action in PDDL.
+
+    Preconditions are added like so:
+
+    (predicate X Y Z):
+      -> rule1(X, Y, Z) :- predicate(X, Y, Z).
+
+    (and (A) (B)):
+      -> rule(X, Y) :- ruleA(X), ruleB(Y).
+
+    (or (A) (B)):
+      -> rule(X, Y) :- ruleA(X), true(Y).
+         rule(X, Y) :- true(X), ruleB(Y).
+    
+    (not (A)):
+      -> rule(X) :- true(X), not ruleA(X).
+
+    (= X Y):
+      -> rule(X, Y) :- true(X), true(Y), X = Y.
+
+    (forall (X, Y) (C)):
+      -> rule(A) :- true(Z), ruleC(X, Y, Z) : X, Y.
+
+    where A, B, C are conditions, depending on variables X, Y, Z respectively,
+
+    where the exact rule namings are slightly different in the code, but translated
+      to ruleA/ruleB/ruleC to match the A, B, C conditions,
+
+    where the true(*) facts are just always true for any object
+      (defined in object asp section).
+
+    Loosely. The actual arguments will depend on the number of used
+    variables in the subconditions, and forall quantification variables
+    are specified using their type facts.
+    
+
+    Returns a pair (added rule ID, used variables, in call order).
+    """
 
     def argument_to_asp(argument: Argument) -> ArgumentAST:
         match argument:
-            case Variable():
-                temporary_id = temporary_id_allocator.get_id_or_insert(argument)
-                return part.create_variable(str(temporary_id))
+            case Variable():   # value is the name
+                return part.create_variable(
+                    str(variable_id_allocator.get_id_or_insert(argument))
+                )
             case Object():
                 return part.create_symbol(
                     str(object_id_allocator.get_id_or_insert(argument))
                 )
 
+    def make_function_literal(
+            identifier: ID | str,
+            arguments: list[Argument],
+            truthiness: bool = True
+    ) -> LiteralAST:
+        # Shorthand to avoid rewriting this listcomp over and over again
+        return part.create_function_literal(
+            str(identifier),
+            [argument_to_asp(arg) for arg in arguments],
+            truthiness
+        )
+
     rule_id = rule_id_allocator.next_id()
-    head = part.create_constant_literal(str(rule_id))
 
     match condition:
         case AndCondition(subconditions):
-            subcondition_ids = (
+            subcondition_ids, subcondition_used_variables = list(zip(*(
+                # Each of these calls returns a pair. These are collected
+                #   as the arguments to zip(), which puts all the IDs into
+                #   one list, and the variable sets into the second.
                 _add_condition_to_asp_part(
                     subcondition,
                     part,
@@ -367,67 +437,98 @@ def _add_condition_to_asp_part(
                     variable_id_allocator,
                     object_id_allocator,
                     predicate_id_allocator,
+                    type_id_allocator
                 )
                 for subcondition in subconditions
-            )
+            )))
+
+            used_variables: list[Variable] = list(set().union(
+                *(set(variables) for variables in subcondition_used_variables)
+            ))
+            head = make_function_literal(rule_id, used_variables)
 
             part.add_rule(
                 head,
                 [
-                    part.create_constant_literal(str(subcondition_id))
-                    for subcondition_id in subcondition_ids
+                    make_function_literal(subcondition_id, sub_used_variables)
+                    for subcondition_id, sub_used_variables in zip(
+                        subcondition_ids, subcondition_used_variables
+                    )
                 ],
             )
         case OrCondition(subconditions):
-            for subcondition in subconditions:
-                subcondition_id = _add_condition_to_asp_part(
+            subcondition_ids, subcondition_used_variables = list(zip(*(
+                # Each of these calls returns a pair. These are collected
+                #   as the arguments to zip(), which puts all the IDs into
+                #   one list, and the variable sets into the second.
+                _add_condition_to_asp_part(
                     subcondition,
                     part,
                     rule_id_allocator,
                     variable_id_allocator,
                     object_id_allocator,
                     predicate_id_allocator,
+                    type_id_allocator
                 )
+                for subcondition in subconditions
+            )))
 
+            used_variables: list[Variable] = list(set().union(
+                *(set(variables) for variables in subcondition_used_variables)
+            ))
+            head = make_function_literal(rule_id, used_variables)
+
+            set_used_variables = set(used_variables)
+
+            for subcondition_id, sub_used_variables in zip(
+                subcondition_ids, subcondition_used_variables
+            ):
+                need_absorbing = set_used_variables - set(sub_used_variables)
                 part.add_rule(
                     head,
-                    [part.create_constant_literal(str(subcondition_id))],
+                    [
+                        *(
+                            make_function_literal(ASP_TRUE, [variable])
+                            for variable in need_absorbing
+                        ),
+                        make_function_literal(subcondition_id, sub_used_variables)
+                    ]
                 )
+
         case NotCondition(base_condition):
-            base_condition_id = _add_condition_to_asp_part(
+            base_condition_id, used_variables = _add_condition_to_asp_part(
                 base_condition,
                 part,
                 rule_id_allocator,
                 variable_id_allocator,
                 object_id_allocator,
                 predicate_id_allocator,
+                type_id_allocator
             )
-
+            head = make_function_literal(rule_id, used_variables)
             part.add_rule(
                 head,
-                [part.create_constant_literal(str(base_condition_id), False)],
+                [
+                    *(
+                        make_function_literal(ASP_TRUE, [variable])
+                        for variable in used_variables 
+                    ),
+                    make_function_literal(base_condition_id, used_variables, False)
+                ]
             )
+
         case Predicate(name=name, assignment=assignment):
+            # NOTE: it's possible that new (never true) predicates need to be inserted
+            # at condition parse time
             predicate_id = predicate_id_allocator.get_id_or_insert(name)
 
-            predicate_literal = part.create_function_literal(
-                str(predicate_id),
-                [argument_to_asp(argument) for argument in assignment],
-            )
+            predicate_literal = make_function_literal(predicate_id, assignment)
+            used_variables = list(filter(lambda x: type(x) == Variable, assignment))
 
-            body = [
-                part.create_function_literal(
-                    str(variable_id_allocator.get_id_or_insert(variable)),
-                    [part.create_variable(str(temporary_id))],
-                )
-                for variable, temporary_id in temporary_id_allocator
-            ]
-
-            body.append(predicate_literal)
-
+            head = make_function_literal(rule_id, used_variables)
             part.add_rule(
                 head,
-                body,
+                [predicate_literal],
             )
         case EqualityCondition(left_side=left_side, right_side=right_side):
             left_side_ast = argument_to_asp(left_side)
@@ -436,23 +537,57 @@ def _add_condition_to_asp_part(
             equality_literal = part.create_equality_literal(
                 left_side_ast, right_side_ast
             )
+            used_variables = list(filter(lambda x: type(x) == Variable, [left_side, right_side]))
 
-            body = [
-                part.create_function_literal(
-                    str(variable_id_allocator.get_id_or_insert(variable)),
-                    [part.create_variable(str(temporary_id))],
-                )
-                for variable, temporary_id in temporary_id_allocator
-            ]
+            head = make_function_literal(rule_id, used_variables)
+            part.add_rule(
+                head,
+                [
+                    *(
+                        make_function_literal(ASP_TRUE, [variable])
+                        for variable in used_variables 
+                    ),
+                    equality_literal
+                ],
+            )
+        case ForallCondition(variables, subcondition):
+            subcondition_id, sub_used_variables = _add_condition_to_asp_part(
+                subcondition,
+                part,
+                rule_id_allocator,
+                variable_id_allocator,
+                object_id_allocator,
+                predicate_id_allocator,
+                type_id_allocator
+            )
+            variables_unwrap = [v.value for v in variables]
 
-            body.append(equality_literal)
+            used_variables = set(sub_used_variables) - set(variables_unwrap)
+            head = make_function_literal(rule_id, used_variables)
+            conditions = []
+
+            for quantification_variable in variables:
+                type_id = type_id_allocator.get_id_or_insert(quantification_variable.type)
+                conditions.append(make_function_literal(
+                    type_id,
+                    [quantification_variable.value]
+                ))
 
             part.add_rule(
                 head,
-                body,
+                [
+                    *(
+                        make_function_literal(ASP_TRUE, [variable])
+                        for variable in used_variables
+                    ),
+                    part.create_conditional_literal(
+                        make_function_literal(subcondition_id, sub_used_variables),
+                        conditions
+                    )
+                ]
             )
 
-    return rule_id
+    return rule_id, used_variables
 
 
 def action_definition_asp_part(
@@ -465,97 +600,43 @@ def action_definition_asp_part(
 ) -> ASPPart:
     part = ASPPart(ASPPartKind.ACTION_DEFINITION)
 
-    # Require each parameter have a single object as its value
-    for parameter in action_definition.parameters:
-        variable_id = variable_id_allocator.get_id_or_insert(parameter.value)
-        type_id = type_id_allocator.get_id_or_insert(parameter.type)
-
-        part.add_single_instantiation_constraint(
-            part.create_function_literal(
-                str(variable_id), [part.create_variable("O")]
-            ),
-            [
-                part.create_function_literal(
-                    str(type_id), [part.create_variable("O")]
-                )
-            ],
-        )
-
-    # Preprocess precondition to replace Foralls with series of Ands
-    def _expand_substitute(
-        condition: Condition[Argument], substitutions: Mapping[Variable, Object]
-    ) -> Condition[Object]:
-        """Fold in to use global information for Forall..."""
-        match condition:
-            case AndCondition(subconditions):
-                return AndCondition(
-                    [
-                        _expand_substitute(subcondition, substitutions)
-                        for subcondition in subconditions
-                    ]
-                )
-            case OrCondition(subconditions):
-                return OrCondition(
-                    [
-                        _expand_substitute(subcondition, substitutions)
-                        for subcondition in subconditions
-                    ]
-                )
-            case NotCondition(base_condition):
-                return NotCondition(_expand_substitute(base_condition, substitutions))
-            case EqualityCondition(left_side, right_side):
-                return EqualityCondition(
-                    substitutions.get(left_side, left_side),
-                    substitutions.get(right_side, right_side),
-                )
-            case ForallCondition(variables, child_condition):
-                names = []      # list[variable_name]
-                choices = []    # list[list[variable_grounding]]
-                objects_by_type = {}
-                for param in problem.objects_section:
-                    if param.type not in objects_by_type:
-                        objects_by_type[param.type] = []
-                    objects_by_type[param.type].append(param.value)
-                for typed_variable in variables:
-                    names.append(typed_variable.value)
-                    choices.append(objects_by_type.get(typed_variable.type, []))
-
-                all_choices = itertools.product(*choices)
-
-                conditions = []
-                for choice in all_choices:
-                    # Copy grounding dict, and add in the specific choice
-                    # NOTE: this can explode memory if you make big foralls,
-                    # maybe this pipeline should be entirely generator based?
-                    # Would require rewriting the grounding and checking pipeline though.
-                    new_subs = dict(substitutions)
-                    new_subs.update({name: value for name, value in zip(names, choice)})
-                    conditions.append(_expand_substitute(child_condition, new_subs))
-
-                return AndCondition(conditions)
-            case Predicate(name, assignment):
-                return Predicate(
-                    name,
-                    tuple(
-                        substitutions.get(argument, argument)
-                        for argument in assignment
-                    ),
-                )
-
-    precondition_id = _add_condition_to_asp_part(
-        _expand_substitute(action_definition.precondition, {}),
+    precondition_id, arguments = _add_condition_to_asp_part(
+        action_definition.precondition,
         part,
         IDAllocator.from_id_constructor(RuleID),
         variable_id_allocator,
         object_id_allocator,
         predicate_id_allocator,
-    )
-    part.add_integrity_constraint(
-        [part.create_constant_literal(str(precondition_id), False)]
+        type_id_allocator
     )
 
-    # Show in the model only the variables
-    for _, variable_id in variable_id_allocator:
-        part.add_show_signature(str(variable_id), 1)
+    body = []
+    # Specify the parameters, and their types.
+    for parameter in action_definition.parameters:
+        variable_id = variable_id_allocator.get_id_or_insert(parameter.value)
+        type_id = type_id_allocator.get_id_or_insert(parameter.type)
+        body.append(part.create_function_literal(
+            str(type_id),
+            [part.create_variable(str(variable_id))]
+        ))
 
+    body.append(part.create_function_literal(
+        str(precondition_id),
+        [
+            part.create_variable(str(variable_id_allocator.get_id_or_insert(arg)))
+            for arg in arguments
+        ]
+    ))
+    head = part.create_function_literal(
+        # Parameters is an iterable of Typed items, which have type and .value.
+        ASP_ACTION_LABEL, 
+        [
+            part.create_variable(
+                str(variable_id_allocator.get_id_or_insert(parameter.value))
+            )
+            for parameter in action_definition.parameters
+        ]
+    )
+    part.add_rule(head, body)
+    part.add_show_signature(ASP_ACTION_LABEL, len(action_definition.parameters))
     return part

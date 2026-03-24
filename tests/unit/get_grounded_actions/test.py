@@ -61,17 +61,12 @@ _CASES = preprocess_traversables(
     ids=_CASES.keys(),
 )
 def test_get_grounded_actions(case: _GetGroundedActionsCase) -> None:
-    grounded_actions = Simulation.from_domain_and_problem(
-        case.domain, case.problem
-    ).get_grounded_actions()
-
-    ret = list(grounded_actions)
-    print("got (list)", ret)
 
     grounded_actions = Simulation.from_domain_and_problem(
         case.domain, case.problem
     ).get_grounded_actions()
     ret = set(grounded_actions)
     print("got (set)", ret)
+    print("I wanted:", case.expected_grounded_actions)
 
     assert case.expected_grounded_actions == ret

@@ -448,14 +448,13 @@ class Simulation:
 
         with control.solve(yield_=True) as handle:
             for model in handle:
-                yield {
-                    variable_id_allocator.get_value(
-                        VariableID.from_str(symbol.name)
-                    ): self._object_name_id_allocator.get_value(
-                        ObjectNameID.from_str(symbol.arguments[0].name)
+                for symbol in model.symbols(shown=True):
+                    yield tuple(
+                        self._object_name_id_allocator.get_value(
+                            ObjectNameID.from_str(arg.name)
+                        )
+                        for arg in symbol.arguments
                     )
-                    for symbol in model.symbols(shown=True)
-                }
 
     def _get_grounded_actions(
         self, action_definition: ActionDefinition
@@ -463,10 +462,7 @@ class Simulation:
         return (
             GroundedAction(
                 action_definition.name,
-                tuple(
-                    grounding[parameter.value]
-                    for parameter in action_definition.parameters
-                ),
+                grounding
             )
             for grounding in self._get_groundings(action_definition)
         )
