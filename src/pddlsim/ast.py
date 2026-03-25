@@ -640,7 +640,7 @@ class EqualityCondition[A: Argument](_Locationed):
 
 @dataclass(frozen=True)
 class ForallCondition[A: Argument]:
-    """Represents a forall predicate (`forall`) in PDDL."""
+    """Represents a universal precondition (`forall`) in PDDL."""
 
     variables: list[Typed[Variable]]
     """Parameters local to the forall predicate."""
