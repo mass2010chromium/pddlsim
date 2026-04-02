@@ -430,7 +430,7 @@ class Simulation:
         control = Control(["-Wno-atom-undefined"])
 
         # Set number of threads to use
-        control.configuration.solve.parallel_mode = os.cpu_count()  # type: ignore
+        control.configuration.solve.parallel_mode = min(64, os.cpu_count())  # type: ignore
         # Compute all models (all groundings)
         control.configuration.solve.models = 0  # type: ignore
 
